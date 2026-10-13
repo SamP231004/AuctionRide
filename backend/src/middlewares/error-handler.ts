@@ -55,6 +55,11 @@ export function toAppError(error: unknown): AppError {
     if (type === 'entity.too.large') return new ValidationError('Request body too large', undefined, 'PAYLOAD_TOO_LARGE');
   }
 
+  // http-errors from Express internals (e.g. express.static for a missing upload).
+  if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404) {
+    return new NotFoundError('File');
+  }
+
   return new InternalServerError();
 }
 

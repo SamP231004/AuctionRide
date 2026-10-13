@@ -1,9 +1,8 @@
 'use client';
 
-import { Bell, Gavel, LayoutDashboard, LogOut, Menu, Moon, Shield, Sun, User as UserIcon, X } from 'lucide-react';
+import { Bell, Gavel, LayoutDashboard, LogOut, Menu, Shield, User as UserIcon, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useTheme } from 'next-themes';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,6 +19,7 @@ import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications 
 import { cn, formatRelative, initials } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth-store';
 import { useUiStore } from '@/store/ui-store';
+import { ThemeToggle } from './theme-toggle';
 
 const NAV = [
   { href: '/auctions/live', label: 'Live' },
@@ -35,16 +35,6 @@ export function Logo({ className }: { className?: string }) {
       </span>
       AuctionRide
     </Link>
-  );
-}
-
-function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme();
-  return (
-    <Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>
-      <Sun className="hidden dark:block" />
-      <Moon className="dark:hidden" />
-    </Button>
   );
 }
 

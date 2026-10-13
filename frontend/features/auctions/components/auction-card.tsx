@@ -29,7 +29,7 @@ export function AuctionCard({ auction, index = 0 }: { auction: AuctionSummary; i
         <div className="relative">
           <BikeImage src={auction.bike.coverImageUrl} alt={auction.bike.title} className="aspect-[16/10] transition-transform duration-500 group-hover:scale-[1.03]" />
           <div className="absolute top-3 left-3 flex gap-1.5">
-            <StatusBadge status={auction.status} outcome={auction.outcome} />
+            <StatusBadge status={auction.status} outcome={auction.outcome} overlay />
             {isLeading && <span className="rounded-full bg-success px-2 py-0.5 text-xs font-medium text-white">You lead</span>}
             {isWinner && (
               <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">

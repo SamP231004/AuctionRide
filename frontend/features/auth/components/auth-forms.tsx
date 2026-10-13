@@ -1,8 +1,10 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
+import { ArrowRight, Loader2, Shield, Sparkles, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useState } from 'react';
 import { useForm, type FieldValues, type Path, type UseFormSetError } from 'react-hook-form';
 import { toast } from 'sonner';
 import { FormField } from '@/components/shared/form-field';
@@ -33,14 +35,69 @@ function applyServerError<T extends FieldValues>(error: unknown, setError: UseFo
   toast.error('Unable to reach the server. Check your connection and try again.');
 }
 
+/**
+ * Seeded demo accounts, shown on the login page so reviewers can explore every role in one click.
+ * Hide them in a real deployment with NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS=false.
+ */
+const SHOW_DEMO_ACCOUNTS = process.env.NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS !== 'false';
+
+interface DemoAccount {
+  label: string;
+  description: string;
+  email: string;
+  password: string;
+  icon: typeof Shield;
+}
+
+const DEMO_ACCOUNTS: DemoAccount[] = [
+  { label: 'Admin', description: 'Manage bikes & auctions', email: 'admin@auctionride.dev', password: 'Admin@12345', icon: Shield },
+  { label: 'Aarav', description: 'Buyer', email: 'aarav@example.com', password: 'Buyer@12345', icon: UserRound },
+  { label: 'Diya', description: 'Buyer · has a won auction', email: 'diya@example.com', password: 'Buyer@12345', icon: UserRound },
+];
+
+function DemoAccounts({ onSelect, pendingEmail }: { onSelect: (account: DemoAccount) => void; pendingEmail: string | null }) {
+  return (
+    <div className="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-primary">
+        <Sparkles className="size-3.5" /> Demo accounts — sign in with one click
+      </p>
+      <div className="grid gap-1.5">
+        {DEMO_ACCOUNTS.map((account) => (
+          <button
+            key={account.email}
+            type="button"
+            disabled={pendingEmail !== null}
+            onClick={() => onSelect(account)}
+            className="group flex items-center gap-3 rounded-lg border bg-background/60 px-3 py-2 text-left transition hover:border-primary/40 hover:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground group-hover:bg-primary/15 group-hover:text-primary">
+              {pendingEmail === account.email ? <Loader2 className="size-4 animate-spin" /> : <account.icon className="size-4" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">
+                {account.label} <span className="font-normal text-muted-foreground">· {account.description}</span>
+              </span>
+              <span className="block truncate font-mono text-xs text-muted-foreground">
+                {account.email} / {account.password}
+              </span>
+            </span>
+            <ArrowRight className="size-4 text-muted-foreground opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function LoginForm() {
   const router = useRouter();
   const next = useSearchParams().get('next');
   const login = useLogin();
   const form = useForm<LoginInput>({ resolver: zodResolver(loginSchema), defaultValues: { email: '', password: '' } });
   const { errors } = form.formState;
+  const [demoEmail, setDemoEmail] = useState<string | null>(null);
 
-  const onSubmit = form.handleSubmit(async (values) => {
+  const signIn = async (values: LoginInput) => {
     try {
       const session = await login.mutateAsync(values);
       toast.success(`Welcome back, ${session.user.name.split(' ')[0]}`);
@@ -48,10 +105,22 @@ export function LoginForm() {
     } catch (error) {
       applyServerError(error, form.setError);
     }
-  });
+  };
+
+  const onSubmit = form.handleSubmit(signIn);
+
+  const signInAsDemo = async (account: DemoAccount) => {
+    form.reset({ email: account.email, password: account.password });
+    setDemoEmail(account.email);
+    await signIn({ email: account.email, password: account.password });
+    setDemoEmail(null);
+  };
 
   return (
     <form onSubmit={onSubmit} className="grid gap-4" noValidate>
+      {SHOW_DEMO_ACCOUNTS && (
+        <DemoAccounts onSelect={signInAsDemo} pendingEmail={login.isPending ? demoEmail : null} />
+      )}
       <FormField id="email" label="Email" error={errors.email?.message}>
         <Input id="email" type="email" autoComplete="email" placeholder="you@example.com" aria-invalid={!!errors.email} aria-describedby="email-message" {...form.register('email')} />
       </FormField>

@@ -8,7 +8,9 @@ import { OUTCOME_LABEL, STATUS_LABEL } from '@/lib/auction-status';
 import { cn } from '@/lib/utils';
 import type { AuctionOutcome, AuctionStatus } from '@/types/api';
 
-export function StatusBadge({ status, outcome }: { status: AuctionStatus; outcome?: AuctionOutcome | null }) {
+/** `overlay` gives non-live badges a solid backdrop so they stay legible on top of photos. */
+export function StatusBadge({ status, outcome, overlay = false }: { status: AuctionStatus; outcome?: AuctionOutcome | null; overlay?: boolean }) {
+  const overlayClass = overlay ? 'bg-background/85 shadow-sm backdrop-blur' : undefined;
   if (status === 'LIVE') {
     return (
       <Badge variant="live">
@@ -21,10 +23,18 @@ export function StatusBadge({ status, outcome }: { status: AuctionStatus; outcom
     );
   }
   if ((status === 'ENDED' || status === 'ARCHIVED') && outcome) {
-    return <Badge variant={outcome === 'SOLD' ? 'success' : 'secondary'}>{OUTCOME_LABEL[outcome]}</Badge>;
+    return (
+      <Badge variant={outcome === 'SOLD' ? 'success' : 'secondary'} className={overlayClass}>
+        {OUTCOME_LABEL[outcome]}
+      </Badge>
+    );
   }
   const variant = status === 'SCHEDULED' ? 'default' : status === 'CANCELLED' ? 'destructive' : 'secondary';
-  return <Badge variant={variant}>{STATUS_LABEL[status]}</Badge>;
+  return (
+    <Badge variant={variant} className={overlayClass}>
+      {STATUS_LABEL[status]}
+    </Badge>
+  );
 }
 
 function pad(value: number) {

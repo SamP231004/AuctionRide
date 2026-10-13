@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/prisma ./prisma
+COPY --chown=node:node seed-assets ./seed-assets
 COPY --chown=node:node package.json prisma.config.ts docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh && mkdir -p /app/uploads && chown node:node /app/uploads
 
