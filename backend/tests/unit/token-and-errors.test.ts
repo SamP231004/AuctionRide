@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
-import { type ZodError, z } from 'zod';
+import { z } from 'zod';
 import { toAppError } from '../../src/middlewares/error-handler.js';
 import { TokenService } from '../../src/services/token.service.js';
 import { AuthenticationError, NotFoundError } from '../../src/utils/errors.js';
