@@ -34,6 +34,11 @@ export class RefreshTokenRepository {
     return result.count === 1;
   }
 
+  async hasActiveInFamily(familyId: string, now: Date, tx: DbClient = this.db): Promise<boolean> {
+    const count = await tx.refreshToken.count({ where: { familyId, revokedAt: null, expiresAt: { gt: now } } });
+    return count > 0;
+  }
+
   async revokeFamily(familyId: string, at: Date, tx: DbClient = this.db): Promise<number> {
     const result = await tx.refreshToken.updateMany({
       where: { familyId, revokedAt: null },

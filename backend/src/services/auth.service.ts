@@ -83,8 +83,12 @@ export class AuthService {
       if (!stored) return { kind: 'invalid' as const };
 
       if (stored.revokedAt) {
+        // Grace only for a genuine rotation race: the family must still have a live successor
+        // (a revoked family — after logout or theft detection — is never "retry-able").
         const recentlyRotated = now.getTime() - stored.revokedAt.getTime() < 10_000;
-        if (recentlyRotated) return { kind: 'race' as const };
+        if (recentlyRotated && (await this.refreshTokens.hasActiveInFamily(stored.familyId, now, tx))) {
+          return { kind: 'race' as const };
+        }
         await this.refreshTokens.revokeFamily(stored.familyId, now, tx);
         return { kind: 'reuse' as const, userId: stored.userId };
       }
