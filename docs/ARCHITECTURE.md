@@ -37,12 +37,8 @@ flowchart LR
   end
 
   subgraph API["API tier (stateless, N replicas)"]
-    A1[Express + Socket.IO]
-    A2[Express + Socket.IO]
-  end
-
-  subgraph Workers["Worker tier (M replicas)"]
-    W1[BullMQ worker<br/>auction lifecycle]
+    A1[Express + Socket.IO<br/>+ BullMQ worker]
+    A2[Express + Socket.IO<br/>+ BullMQ worker]
   end
 
   R[(Redis<br/>queues · pub/sub · rate limits · cache)]
@@ -55,9 +51,7 @@ flowchart LR
   A1 & A2 -- Prisma --> P
   A1 & A2 -- adapter pub/sub, rate limit --> R
   A1 & A2 -- enqueue delayed jobs --> R
-  W1 -- consume jobs --> R
-  W1 -- Prisma --> P
-  W1 -- "@socket.io/redis-emitter" --> R
+  A1 & A2 -- consume lifecycle jobs --> R
   A1 & A2 --> S
 ```
 
@@ -65,10 +59,11 @@ Key properties:
 
 - **API nodes hold no session state.** Access tokens are self-contained JWTs; refresh tokens live in Postgres;
   Socket.IO rooms are synchronised across nodes by the Redis adapter.
-- **Workers are a separate entry point** (`dist/worker.js`) sharing the same services. In development and on small
-  deployments the API process also runs the workers (`RUN_WORKERS=true`), so there is one thing to deploy.
-- **Workers never talk to sockets directly.** They emit through `@socket.io/redis-emitter`, which publishes onto the
-  same Redis channel the adapter listens to. Every API node then delivers the event to its local sockets.
+- **Lifecycle workers run inside the API process** (`RUN_WORKERS=true`), so there is a single deployable. BullMQ
+  distributes jobs across every process that runs a worker, and jobs are idempotent, so running workers on several
+  replicas is safe. Turning `RUN_WORKERS=false` on some replicas dedicates them to HTTP/WebSocket traffic.
+- **Broadcasts from jobs reach every replica.** A worker emits through its own Socket.IO server, whose Redis adapter
+  relays the event to the sockets connected to every other API node.
 
 ---
 
@@ -107,12 +102,10 @@ Rules enforced by convention and code review:
 backend/
 ├── prisma/
 │   ├── schema.prisma
-│   ├── migrations/
-│   └── seed.ts
+│   └── migrations/
 ├── src/
 │   ├── app.ts                # express app factory (no listen) — used by server and tests
 │   ├── server.ts             # HTTP + Socket.IO bootstrap, graceful shutdown
-│   ├── worker.ts             # standalone queue worker entry point
 │   ├── container.ts          # composition root: wires repositories → services → controllers
 │   ├── config/               # env parsing (zod), constants, cookie/cors config
 │   ├── controllers/
@@ -123,6 +116,7 @@ backend/
 │   ├── validators/           # zod schemas for body / params / query
 │   ├── socket/               # Socket.IO server, auth handshake, room handlers, event publisher
 │   ├── jobs/                 # BullMQ queues, schedulers, processors
+│   ├── scripts/              # seed (compiled, so it also runs in the container)
 │   ├── utils/                # errors, logger, response helpers, pagination, time
 │   └── types/
 └── tests/
@@ -526,9 +520,7 @@ All routes are prefixed with `/api` except health. `🔓` public · `👤` authe
 |---|---|---|---|
 | PATCH | `/me` | 👤 | Update profile |
 | GET | `/me/summary` | 👤 | Dashboard counters |
-| GET | `/me/bids` | 👤 | Auctions I bid on, with my top bid and status |
-| GET | `/me/auctions/won` | 👤 | Won auctions |
-| GET | `/me/auctions/lost` | 👤 | Ended auctions I bid on and did not win |
+| GET | `/me/auctions?filter=` | 👤 | Auctions I bid on (`active`, `won`, `lost` or `all`), with my top bid and whether I lead |
 | GET | `/me/watchlist` | 👤 | Watched auctions |
 | GET | `/me/notifications` | 👤 | Paginated, `unreadOnly` filter |
 | POST | `/me/notifications/:id/read` | 👤 | Mark read |
@@ -540,7 +532,6 @@ All routes are prefixed with `/api` except health. `🔓` public · `👤` authe
 | GET | `/admin/dashboard` | 🛡 | KPIs, live auctions, recent bids |
 | GET | `/admin/analytics` | 🛡 | Time series (bids/day, GMV/day), sell-through, top auctions |
 | GET | `/admin/winners` | 🛡 | Ended auctions with winners |
-| GET | `/admin/audit-logs` | 🛡 | Paginated audit trail |
 
 ### Health
 | Method | Path | Description |
@@ -601,7 +592,6 @@ requests wait on one refresh promise) before retrying once.
 |---|---|---|
 | Frontend | Vercel | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SOCKET_URL` |
 | API | Railway / Render (Docker) | ≥ 2 replicas, health check `/health/ready`, WebSockets enabled |
-| Worker | Railway / Render (same image, `node dist/worker.js`) | scale independently |
 | Database | Neon Postgres | `DATABASE_URL` = pooled (PgBouncer) endpoint for the app; `DIRECT_URL` = direct endpoint for migrations |
 | Redis | Redis Cloud | `noeviction` policy, TLS (`rediss://`) |
 | Images | Local volume in dev; S3/R2 + CDN in production via `StorageProvider` | |
@@ -620,7 +610,7 @@ container start in a multi-replica deployment (the Docker entrypoint does it onl
 | **Bid write contention** | Row lock per auction ⇒ contention scales with *bids per auction*, not total bids. A single hot auction handles hundreds of bids/sec on Postgres; beyond that, front it with a Redis Lua script as the sequencer and persist asynchronously (see trade-offs). |
 | **Database** | Neon PgBouncer pooling (Prisma `connection_limit` tuned per replica). Read replicas for listing/analytics queries via a read-only Prisma client in repositories that are read-heavy. Partition `bids` by month if it grows beyond ~100M rows. |
 | **Caching** | Listing pages tolerate ~2s staleness → Redis cache for `GET /auctions` first pages keyed by normalised query, invalidated on `auction:updated`. Admin analytics cached 60s. Bike images served from a CDN. |
-| **Queues** | Workers are a separate deployment; BullMQ concurrency per worker is configurable. Lifecycle jobs are tiny, so one worker handles thousands per minute. |
+| **Queues** | BullMQ workers run on any replica with `RUN_WORKERS=true`; concurrency per worker is configurable. Lifecycle jobs are tiny, so one worker handles thousands per minute. For isolation, a dedicated worker deployment can publish via `@socket.io/redis-emitter` (future work). |
 | **Rate limiting** | Redis-backed store so limits are global across replicas, not per node. |
 | **Frontend** | Static/ISR marketing pages on Vercel's CDN, route-level code splitting, `next/image` lazy loading. |
 | **Observability** | Structured JSON logs (pino) → any log pipeline. A `/metrics` endpoint with `prom-client` slots into the existing middleware chain (request duration histogram, bid latency, queue depth, socket count). |
@@ -649,7 +639,7 @@ container start in a multi-replica deployment (the Docker entrypoint does it onl
 |---|---|---|
 | Postgres row lock as the bid sequencer | Strong consistency, simple, auditable | Single-auction throughput bounded by one row lock (~hundreds/sec). Revisit for "flash" auctions with tens of thousands of bidders. |
 | REST for bids, sockets for fan-out | One validation path, clear acks | One extra round trip vs. socket emit (negligible). |
-| Workers in API process by default | One deployable for small installs | Must set `RUN_WORKERS=false` on API replicas once a dedicated worker exists. |
+| Workers in the API process | One deployable, no extra socket bridge | A slow job shares CPU with HTTP traffic; split into a dedicated worker deployment if job volume grows. |
 | Access token in memory | Not readable after XSS-induced reload, not CSRF-able | Every full page load does one refresh call. |
 | Client-side route guards | Works with a cross-origin API and in-memory tokens | Protected page shells are rendered before the session is known (a skeleton is shown; no data leaks since data comes from the API). |
 | Integer rupees | Simplicity | No paise; acceptable for vehicle auctions. |
