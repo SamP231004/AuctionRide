@@ -1,0 +1,238 @@
+// AuctionRide data model.
+// Design notes live in docs/ARCHITECTURE.md §4. Conventions:
+//   * UUID primary keys, snake_case tables/columns via @map
+//   * all timestamps are timestamptz (UTC)
+//   * money is stored as whole INR rupees in INT columns
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled (PgBouncer) connection string used at runtime.
+  url       = env("DATABASE_URL")
+  // Direct connection used by `prisma migrate` (PgBouncer cannot run migrations).
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  ADMIN
+  BUYER
+}
+
+enum AuctionStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ENDED
+  ARCHIVED
+  CANCELLED
+}
+
+enum AuctionOutcome {
+  SOLD
+  RESERVE_NOT_MET
+  NO_BIDS
+}
+
+enum NotificationType {
+  OUTBID
+  AUCTION_STARTED
+  AUCTION_WON
+  AUCTION_LOST
+  AUCTION_CANCELLED
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String    @db.VarChar(80)
+  /// Always stored lower-cased and trimmed (normalised in the validator).
+  email        String    @unique @db.VarChar(254)
+  passwordHash String    @map("password_hash")
+  role         Role      @default(BUYER)
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  refreshTokens  RefreshToken[]
+  bids           Bid[]
+  wonAuctions    Auction[]      @relation("AuctionWinner")
+  leadingIn      Auction[]      @relation("AuctionHighestBidder")
+  createdBikes   Bike[]         @relation("BikeCreator")
+  createdAuction Auction[]      @relation("AuctionCreator")
+  watchlist      Watchlist[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// SHA-256 of the opaque token. The raw token is never persisted.
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  /// All tokens produced by rotating one login share a family; reuse revokes the family.
+  familyId  String    @map("family_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  userAgent String?   @map("user_agent") @db.VarChar(512)
+  ipAddress String?   @map("ip_address") @db.VarChar(64)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Bike {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String   @db.VarChar(120)
+  brand       String   @db.VarChar(60)
+  model       String   @db.VarChar(80)
+  year        Int      @db.SmallInt
+  engineCC    Int      @map("engine_cc") @db.SmallInt
+  kilometers  Int
+  owners      Int      @default(1) @db.SmallInt
+  location    String   @db.VarChar(80)
+  description String   @db.Text
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy User        @relation("BikeCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  images    BikeImage[]
+  auctions  Auction[]
+
+  @@index([brand])
+  @@index([createdAt])
+  @@map("bikes")
+}
+
+model BikeImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  bikeId     String   @map("bike_id") @db.Uuid
+  url        String   @db.VarChar(1024)
+  /// Provider-specific key used to delete the underlying object.
+  storageKey String   @map("storage_key") @db.VarChar(512)
+  position   Int      @default(0) @db.SmallInt
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  bike Bike @relation(fields: [bikeId], references: [id], onDelete: Cascade)
+
+  @@index([bikeId, position])
+  @@map("bike_images")
+}
+
+model Auction {
+  id               String          @id @default(uuid()) @db.Uuid
+  bikeId           String          @map("bike_id") @db.Uuid
+  status           AuctionStatus   @default(DRAFT)
+  startingPrice    Int             @map("starting_price")
+  /// Optional. Never exposed to buyers — only whether it has been met.
+  reservePrice     Int?            @map("reserve_price")
+  minimumIncrement Int             @map("minimum_increment")
+  /// Denormalised from bids, written in the same transaction as each bid.
+  currentPrice     Int?            @map("current_price")
+  highestBidderId  String?         @map("highest_bidder_id") @db.Uuid
+  bidCount         Int             @default(0) @map("bid_count")
+  startsAt         DateTime        @map("starts_at") @db.Timestamptz(3)
+  endsAt           DateTime        @map("ends_at") @db.Timestamptz(3)
+  /// Number of soft-close extensions applied (anti-sniping).
+  extensionCount   Int             @default(0) @map("extension_count") @db.SmallInt
+  outcome          AuctionOutcome?
+  winnerId         String?         @map("winner_id") @db.Uuid
+  startedAt        DateTime?       @map("started_at") @db.Timestamptz(3)
+  endedAt          DateTime?       @map("ended_at") @db.Timestamptz(3)
+  archivedAt       DateTime?       @map("archived_at") @db.Timestamptz(3)
+  cancelledAt      DateTime?       @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason     String?         @map("cancel_reason") @db.VarChar(500)
+  /// Optimistic-concurrency token for admin edits.
+  version          Int             @default(0)
+  createdById      String          @map("created_by_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  bike          Bike           @relation(fields: [bikeId], references: [id], onDelete: Restrict)
+  highestBidder User?          @relation("AuctionHighestBidder", fields: [highestBidderId], references: [id], onDelete: SetNull)
+  winner        User?          @relation("AuctionWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  createdBy     User           @relation("AuctionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  bids          Bid[]
+  watchers      Watchlist[]
+  notifications Notification[]
+
+  @@index([status, startsAt])
+  @@index([status, endsAt])
+  @@index([bikeId])
+  @@index([winnerId])
+  @@map("auctions")
+}
+
+model Bid {
+  id        String   @id @default(uuid()) @db.Uuid
+  auctionId String   @map("auction_id") @db.Uuid
+  bidderId  String   @map("bidder_id") @db.Uuid
+  amount    Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidder  User    @relation(fields: [bidderId], references: [id], onDelete: Restrict)
+
+  /// Bids on an auction strictly increase, so amounts are unique per auction.
+  @@unique([auctionId, amount])
+  @@index([bidderId, createdAt])
+  @@index([auctionId, createdAt])
+  @@map("bids")
+}
+
+model Watchlist {
+  userId    String   @map("user_id") @db.Uuid
+  auctionId String   @map("auction_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, auctionId])
+  @@index([auctionId])
+  @@map("watchlist")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(160)
+  body      String           @db.VarChar(500)
+  auctionId String?          @map("auction_id") @db.Uuid
+  readAt    DateTime?        @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction Auction? @relation(fields: [auctionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(64)
+  entityType String   @map("entity_type") @db.VarChar(32)
+  entityId   String?  @map("entity_id") @db.VarChar(64)
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(64)
+  userAgent  String?  @map("user_agent") @db.VarChar(512)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
