@@ -11,7 +11,7 @@ import { BikeImage, Countdown, StatusBadge } from './auction-meta';
 
 export function AuctionCard({ auction, index = 0 }: { auction: AuctionSummary; index?: number }) {
   const userId = useAuthStore((s) => s.user?.id);
-  const isLeading = auction.highestBidder?.id === userId && auction.status === 'LIVE';
+  const isLeading = Boolean(userId) && auction.highestBidder?.id === userId && auction.status === 'LIVE';
   const isWinner = auction.winnerId !== null && auction.winnerId === userId;
   const price = auction.currentPrice ?? auction.startingPrice;
 

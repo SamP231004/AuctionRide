@@ -1,6 +1,7 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MotionConfig } from 'framer-motion';
 import { ThemeProvider } from 'next-themes';
 import { useState, type ReactNode } from 'react';
 import { Toaster } from 'sonner';
@@ -31,7 +32,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <AuthBootstrap />
         <RealtimeBridge />
-        {children}
+        {/* Honour the OS "reduce motion" setting for every animation. */}
+        <MotionConfig reducedMotion="user">{children}</MotionConfig>
         <Toaster richColors closeButton position="bottom-right" theme="system" />
       </QueryClientProvider>
     </ThemeProvider>
